@@ -12,6 +12,7 @@
 #include <limits>
 #include <list>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -166,6 +167,48 @@ public:
     mutable std::unordered_set<std::string> candidatesToCursorSet_;
     std::vector<fcitx::ScopedConnection> conn_;
     std::list<PinyinWordNode> contextWords_;
+
+    std::vector<PinyinSegmentFix> fixes_;
+
+    // Discard the decode state attached to the graph nodes after the
+    // absolute input position pos, keeping everything up to and including
+    // the node at pos. Only the node keyed state is dropped; the graph
+    // itself and the LRU caches in matchState_ are kept. Callers must run
+    // update() afterwards.
+    void discardDecodeStateAfter(size_t pos) {
+        FCITX_Q();
+        const size_t start = q->selectedLength();
+        size_t begin = 0;
+        if (pos >= start) {
+            begin = pos - start + 1;
+        }
+        std::unordered_set<const SegmentGraphNode *> nodes;
+        for (size_t i = begin; i <= segs_.size(); i++) {
+            for (const auto &node : segs_.nodes(i)) {
+                nodes.insert(&node);
+            }
+        }
+        if (nodes.empty()) {
+            return;
+        }
+        lattice_.discardNode(nodes);
+        matchState_.discardNode(nodes);
+    }
+
+    // Remove the fixes that are affected by an edit starting at from.
+    // Return the start of the first removed fix, if any.
+    std::optional<size_t> discardFixesAfter(size_t from) {
+        // The fixes are ordered and non-overlapping, so their end_ is
+        // strictly increasing: the removed fixes always form a suffix.
+        auto iter =
+            std::ranges::upper_bound(fixes_, from, {}, &PinyinSegmentFix::end_);
+        if (iter == fixes_.end()) {
+            return std::nullopt;
+        }
+        const size_t first = iter->start_;
+        fixes_.erase(iter, fixes_.end());
+        return first;
+    }
 
     size_t alignCursorToNextSegment() const {
         FCITX_Q();
@@ -476,32 +519,45 @@ bool PinyinContext::typeImpl(const char *s, size_t length) {
             return false;
         }
     }
-    auto changed = cancelTill(cursor());
-    changed = InputBuffer::typeImpl(s, length) || changed;
-    if (changed) {
+    const size_t pos = cursor();
+    const bool cancelled = cancelTill(pos);
+    const bool typed = InputBuffer::typeImpl(s, length);
+    // A fix that spans the edit point also affects the lattice before the
+    // edit point, which the merge in update() won't discard, so the fix
+    // driven discard must happen here, before the graph is merged.
+    if (typed) {
+        if (const auto first = d->discardFixesAfter(pos)) {
+            d->discardDecodeStateAfter(*first);
+        }
+    }
+    if (cancelled || typed) {
         update();
     }
-    return changed;
+    return cancelled || typed;
 }
 
 void PinyinContext::erase(size_t from, size_t to) {
+    FCITX_D();
     if (from == to) {
         return;
     }
 
     // check if erase everything
     if (from == 0 && to >= size()) {
-        FCITX_D();
         d->clearCandidates();
         d->selected_.clear();
         d->lattice_.clear();
         d->matchState_.clear();
         d->segs_ = SegmentGraph();
+        d->fixes_.clear();
     } else {
         cancelTill(from);
     }
     InputBuffer::erase(from, to);
 
+    if (const auto first = d->discardFixesAfter(from)) {
+        d->discardDecodeStateAfter(*first);
+    }
     if (!empty()) {
         update();
     }
@@ -511,8 +567,12 @@ void PinyinContext::setCursor(size_t pos) {
     FCITX_D();
     auto oldCursor = cursor();
     auto cancelled = cancelTill(pos);
+    const auto touchedFix = d->discardFixesAfter(pos);
+    if (touchedFix) {
+        d->discardDecodeStateAfter(*touchedFix);
+    }
     InputBuffer::setCursor(pos);
-    if (cancelled) {
+    if (cancelled || touchedFix) {
         update();
     } else {
         if (cursor() != oldCursor) {
@@ -630,6 +690,41 @@ bool PinyinContext::cancelTill(size_t pos) {
         cancelled = true;
     }
     return cancelled;
+}
+
+void PinyinContext::setPinyinFixes(std::vector<PinyinSegmentFix> fixes) {
+    FCITX_D();
+    if (d->fixes_ == fixes) {
+        return;
+    }
+    const size_t start = selectedLength();
+    auto it1 = std::ranges::lower_bound(d->fixes_, start, {},
+                                        &PinyinSegmentFix::start_);
+    auto it2 =
+        std::ranges::lower_bound(fixes, start, {}, &PinyinSegmentFix::start_);
+    // Both sequences are strictly ordered and non-overlapping, the first
+    // mismatched position between the two sequences inherently corresponds to
+    // the earliest `start_` offset across all added, removed or modified
+    // fixes.
+    auto [m1, m2] =
+        std::ranges::mismatch(it1, d->fixes_.end(), it2, fixes.end());
+    size_t firstChanged = std::numeric_limits<size_t>::max();
+    if (m1 != d->fixes_.end()) {
+        firstChanged = std::min(firstChanged, m1->start_);
+    }
+    if (m2 != fixes.end()) {
+        firstChanged = std::min(firstChanged, m2->start_);
+    }
+    d->fixes_ = std::move(fixes);
+    if (firstChanged != std::numeric_limits<size_t>::max()) {
+        d->discardDecodeStateAfter(firstChanged);
+    }
+    update();
+}
+
+const std::vector<PinyinSegmentFix> &PinyinContext::pinyinFixes() const {
+    FCITX_D();
+    return d->fixes_;
 }
 
 void PinyinContext::cancel() {

@@ -74,6 +74,19 @@ size_t PinyinMatchState::partialLongWordLimit() const {
     return d->context_->ime()->partialLongWordLimit();
 }
 
+std::vector<PinyinSegmentFix> PinyinMatchState::pinyinFixes() const {
+    FCITX_D();
+    const size_t start = d->context_->selectedLength();
+    std::vector<PinyinSegmentFix> result;
+    for (const auto &fix : d->context_->pinyinFixes()) {
+        if (fix.start_ >= start) {
+            result.push_back(
+                {fix.start_ - start, fix.end_ - start, fix.fixed_});
+        }
+    }
+    return result;
+}
+
 void PinyinMatchState::discardDictionary(size_t idx) {
     FCITX_D();
     d->matchCacheMap_.erase(d->context_->ime()->dict()->trie(idx));

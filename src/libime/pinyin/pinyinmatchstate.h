@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_set>
+#include <vector>
 #include <fcitx-utils/macros.h>
 #include <libime/pinyin/libimepinyin_export.h>
 #include <libime/pinyin/pinyinencoder.h>
@@ -42,6 +43,10 @@ public:
     std::shared_ptr<const ShuangpinProfile> shuangpinProfile() const;
     std::shared_ptr<const PinyinCorrectionProfile> correctionProfile() const;
     size_t partialLongWordLimit() const;
+
+    // Return the active pinyin fixes in the coordinate of the graph that is
+    // being decoded. Fixes before the selected part are not included.
+    std::vector<PinyinSegmentFix> pinyinFixes() const;
 
 private:
     std::unique_ptr<PinyinMatchStatePrivate> d_ptr;

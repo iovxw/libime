@@ -58,8 +58,23 @@ const char pinyinHanziSep = '!';
 constexpr uint32_t pinyinBinaryFormatMagic = 0x000fc613;
 constexpr uint32_t pinyinBinaryFormatVersion = 0x2;
 
+// Return the fix that exactly covers the segment [from, to), if any.
+// The fixes are ordered and non-overlapping, so a binary search by start_
+// finds the only candidate.
+const PinyinSegmentFix *findExactFix(const std::vector<PinyinSegmentFix> &fixes,
+                                     size_t from, size_t to) {
+    const auto iter =
+        std::ranges::lower_bound(fixes, from, {}, &PinyinSegmentFix::start_);
+    if (iter != fixes.end() && iter->start_ == from && iter->end_ == to) {
+        return &*iter;
+    }
+    return nullptr;
+}
+
 struct PinyinSegmentGraphPathHasher {
-    PinyinSegmentGraphPathHasher(const SegmentGraph &graph) : graph_(graph) {}
+    PinyinSegmentGraphPathHasher(const SegmentGraph &graph,
+                                 const std::vector<PinyinSegmentFix> &fixes)
+        : graph_(graph), fixes_(fixes) {}
 
     // Generate a "|" separated raw pinyin string from given path, skip all
     // separator.
@@ -76,9 +91,19 @@ struct PinyinSegmentGraphPathHasher {
             if (data[begin] == '\'') {
                 continue;
             }
-            while (begin < end) {
-                result.push_back(data[begin]);
-                begin++;
+            if (const auto *fix = findExactFix(fixes_, begin, end)) {
+                // The char of a PinyinInitial is always an upper case
+                // letter, which never starts a multi character segment
+                // from user input (upper case input forms single character
+                // Letter segments), so the two char key of a fixed segment
+                // never conflicts with a natural one.
+                result.push_back(static_cast<char>(fix->fixed_.initial()));
+                result.push_back(static_cast<char>(fix->fixed_.final()));
+            } else {
+                while (begin < end) {
+                    result.push_back(data[begin]);
+                    begin++;
+                }
             }
             result.push_back('|');
         }
@@ -102,9 +127,16 @@ struct PinyinSegmentGraphPathHasher {
             if (data[begin] == '\'') {
                 continue;
             }
-            while (begin < end) {
-                boost::hash_combine(seed, hasher(data[begin]));
-                begin++;
+            if (const auto *fix = findExactFix(fixes_, begin, end)) {
+                boost::hash_combine(
+                    seed, hasher(static_cast<char>(fix->fixed_.initial())));
+                boost::hash_combine(
+                    seed, hasher(static_cast<char>(fix->fixed_.final())));
+            } else {
+                while (begin < end) {
+                    boost::hash_combine(seed, hasher(data[begin]));
+                    begin++;
+                }
             }
             boost::hash_combine(seed, hasher('|'));
         }
@@ -128,15 +160,28 @@ struct PinyinSegmentGraphPathHasher {
             if (data[begin] == '\'') {
                 continue;
             }
-            while (begin < end && is != s.end()) {
-                if (*is != data[begin]) {
+            if (const auto *fix = findExactFix(fixes_, begin, end)) {
+                if (is == s.end() ||
+                    *is != static_cast<char>(fix->fixed_.initial())) {
                     return false;
                 }
                 is++;
-                begin++;
-            }
-            if (begin != end) {
-                return false;
+                if (is == s.end() ||
+                    *is != static_cast<char>(fix->fixed_.final())) {
+                    return false;
+                }
+                is++;
+            } else {
+                while (begin < end && is != s.end()) {
+                    if (*is != data[begin]) {
+                        return false;
+                    }
+                    is++;
+                    begin++;
+                }
+                if (begin != end) {
+                    return false;
+                }
             }
 
             if (is == s.end() || *is != '|') {
@@ -149,6 +194,7 @@ struct PinyinSegmentGraphPathHasher {
 
 private:
     const SegmentGraph &graph_;
+    const std::vector<PinyinSegmentFix> &fixes_;
 };
 
 struct SegmentGraphNodeGreater {
@@ -307,7 +353,8 @@ public:
         const SegmentGraph &graph, const GraphMatchCallback &callback,
         const std::unordered_set<const SegmentGraphNode *> &ignore,
         PinyinMatchState *matchState)
-        : graph_(graph), hasher_(graph), callback_(callback), ignore_(ignore),
+        : graph_(graph), fixes_(matchState->pinyinFixes()),
+          hasher_(graph, fixes_), callback_(callback), ignore_(ignore),
           matchedPathsMap_(&matchState->d_func()->matchedPaths_),
           nodeCacheMap_(&matchState->d_func()->nodeCacheMap_),
           matchCacheMap_(&matchState->d_func()->matchCacheMap_),
@@ -320,12 +367,13 @@ public:
         const SegmentGraph &graph, const GraphMatchCallback &callback,
         const std::unordered_set<const SegmentGraphNode *> &ignore,
         NodeToMatchedPinyinPathsMap &matchedPaths)
-        : graph_(graph), hasher_(graph), callback_(callback), ignore_(ignore),
-          matchedPathsMap_(&matchedPaths) {}
+        : graph_(graph), hasher_(graph, fixes_), callback_(callback),
+          ignore_(ignore), matchedPathsMap_(&matchedPaths) {}
 
     PinyinMatchContext(const PinyinMatchContext &) = delete;
 
     const SegmentGraph &graph_;
+    std::vector<PinyinSegmentFix> fixes_;
     PinyinSegmentGraphPathHasher hasher_;
 
     const GraphMatchCallback &callback_;
@@ -338,6 +386,38 @@ public:
     std::shared_ptr<const PinyinCorrectionProfile> correctionProfile_;
     size_t partialLongWordLimit_ = 0;
 };
+
+// An edge that intersects a fix without exactly matching it makes the whole
+// path invalid. An edge that exactly matches a fix needs no check: its
+// syllable was replaced by the fixed one in findMatchesBetween, so any trie
+// match through the path already carries the fixed syllable. The filter only
+// depends on the path, not on the individual word.
+static bool pathAllowedByFixes(const PinyinMatchContext &context,
+                               const SegmentGraphPath &path) {
+    if (context.fixes_.empty()) {
+        return true;
+    }
+    for (auto iter = path.begin(), end = std::prev(path.end()); iter != end;
+         ++iter) {
+        const size_t from = (*iter)->index();
+        const size_t to = (*std::next(iter))->index();
+        if (context.graph_.segment(from, to).starts_with("\'")) {
+            continue;
+        }
+        if (findExactFix(context.fixes_, from, to)) {
+            continue;
+        }
+        // The fixes are ordered and non-overlapping, so the last fix that
+        // starts before to is the only candidate for an intersection with
+        // [from, to).
+        const auto bound = std::ranges::lower_bound(context.fixes_, to, {},
+                                                    &PinyinSegmentFix::start_);
+        if (bound != context.fixes_.begin() && from < std::prev(bound)->end_) {
+            return false;
+        }
+    }
+    return true;
+}
 
 class PinyinDictionaryPrivate : fcitx::QPtrHolder<PinyinDictionary> {
 public:
@@ -518,6 +598,13 @@ bool PinyinDictionaryPrivate::matchWordsForOnePath(
         return false;
     }
 
+    // The filter only depends on the path: if the path crosses a fix without
+    // matching it, no word matched on this path can be valid. Checking here
+    // also avoids touching the matching cache for invalid paths.
+    if (!pathAllowedByFixes(context, path.path_)) {
+        return false;
+    }
+
     // minimumLongWordLength is to prevent algorithm runs too slow.
     const bool matchLongWordEnabled =
         context.partialLongWordLimit_ &&
@@ -617,12 +704,19 @@ void PinyinDictionaryPrivate::findMatchesBetween(
         return;
     }
 
-    const auto syls =
+    auto syls =
         context.spProfile_
             ? PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
                   pinyin, *context.spProfile_, context.flags_)
             : PinyinEncoder::stringToSyllablesWithFuzzyFlags(
                   pinyin, context.correctionProfile_.get(), context.flags_);
+    // A fixed segment is always read as the given syllable, no matter what the
+    // segment text looks like.
+    if (const auto *fix = findExactFix(context.fixes_, prevNode.index(),
+                                       currentNode.index())) {
+        syls = {{fix->fixed_.initial(),
+                 {{fix->fixed_.final(), PinyinFuzzyFlag::None}}}};
+    }
     const MatchedPinyinPaths &prevMatchedPaths = matchedPathsMap[&prevNode];
     MatchedPinyinPaths newPaths;
     for (const auto &path : prevMatchedPaths) {
