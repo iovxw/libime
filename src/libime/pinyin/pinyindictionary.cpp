@@ -43,8 +43,10 @@
 #include "libime/core/zstdfilter.h"
 #include "libime/pinyin/pinyinmatchstate.h"
 #include "constants.h"
+#include "pinyincontext.h"
 #include "pinyindecoder_p.h"
 #include "pinyinencoder.h"
+#include "pinyinencoder_p.h"
 #include "pinyinmatchstate_p.h"
 
 namespace libime {
@@ -214,7 +216,10 @@ public:
         const SegmentGraph &graph, const GraphMatchCallback &callback,
         const std::unordered_set<const SegmentGraphNode *> &ignore,
         PinyinMatchState *matchState)
-        : graph_(graph), hasher_(graph), callback_(callback), ignore_(ignore),
+        : graph_(graph),
+          fixes_({matchState->d_func()->context_->pinyinFixes(),
+                  matchState->d_func()->context_->selectedLength()}),
+          hasher_(graph), callback_(callback), ignore_(ignore),
           matchedPathsMap_(&matchState->d_func()->matchedPaths_),
           nodeCacheMap_(&matchState->d_func()->nodeCacheMap_),
           matchCacheMap_(&matchState->d_func()->matchCacheMap_),
@@ -227,12 +232,13 @@ public:
         const SegmentGraph &graph, const GraphMatchCallback &callback,
         const std::unordered_set<const SegmentGraphNode *> &ignore,
         NodeToMatchedPinyinPathsMap &matchedPaths)
-        : graph_(graph), hasher_(graph), callback_(callback), ignore_(ignore),
-          matchedPathsMap_(&matchedPaths) {}
+        : graph_(graph), fixes_({}, 0), hasher_(graph), callback_(callback),
+          ignore_(ignore), matchedPathsMap_(&matchedPaths) {}
 
     PinyinMatchContext(const PinyinMatchContext &) = delete;
 
     const SegmentGraph &graph_;
+    PinyinFixesWithOffset fixes_;
     PinyinStringHasher hasher_;
 
     const GraphMatchCallback &callback_;
@@ -453,9 +459,10 @@ bool PinyinDictionaryPrivate::matchWordsForOnePath(
                 ->try_emplace(path.trie(), PinyinStringHasher(context.graph_),
                               PinyinStringEqual(context.graph_))
                 .first->second;
-        auto *result = matchCache.find(path.path_);
+        const PathWithFixes key{path.path_, context.fixes_};
+        auto *result = matchCache.find(key);
         if (!result) {
-            result = matchCache.insert(context.hasher_.stringFor(path.path_));
+            result = matchCache.insert(context.hasher_.stringFor(key));
             result->clear();
 
             auto &items = *result;
@@ -526,12 +533,22 @@ void PinyinDictionaryPrivate::findMatchesBetween(
         return;
     }
 
-    const auto syls =
-        context.spProfile_
-            ? PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
-                  pinyin, *context.spProfile_, context.flags_)
-            : PinyinEncoder::stringToSyllablesWithFuzzyFlags(
-                  pinyin, context.correctionProfile_.get(), context.flags_);
+    const auto &[fixes, fixesOffset] = context.fixes_;
+    const auto *fix = findExactFix(fixes, prevNode.index() + fixesOffset,
+                                   currentNode.index() + fixesOffset);
+    MatchedPinyinSyllablesWithFuzzyFlags syls;
+    if (fix) {
+        // A fixed segment is always read as the given syllable, no matter what
+        // the segment text looks like.
+        syls = {{fix->fixed_.initial(),
+                 {{fix->fixed_.final(), PinyinFuzzyFlag::None}}}};
+    } else if (context.spProfile_) {
+        syls = PinyinEncoder::shuangpinToSyllablesWithFuzzyFlags(
+            pinyin, *context.spProfile_, context.flags_);
+    } else {
+        syls = PinyinEncoder::stringToSyllablesWithFuzzyFlags(
+            pinyin, context.correctionProfile_.get(), context.flags_);
+    }
     const MatchedPinyinPaths &prevMatchedPaths = matchedPathsMap[&prevNode];
     MatchedPinyinPaths newPaths;
     for (const auto &path : prevMatchedPaths) {
@@ -547,13 +564,13 @@ void PinyinDictionaryPrivate::findMatchesBetween(
                                   PinyinStringHasher(context.graph_),
                                   PinyinStringEqual(context.graph_))
                     .first->second;
-            auto *p = nodeCache.find(segmentPath);
+            const PathWithFixes key{segmentPath, context.fixes_};
+            auto *p = nodeCache.find(key);
             std::shared_ptr<MatchedPinyinTrieNodes> result;
             if (!p) {
                 result = std::make_shared<MatchedPinyinTrieNodes>(
                     path.trie(), path.size() + 1);
-                nodeCache.insert(context.hasher_.stringFor(segmentPath),
-                                 result);
+                nodeCache.insert(context.hasher_.stringFor(key), result);
                 result->triePositions_ =
                     traverseAlongPathOneStepBySyllables(path, syls);
             } else {

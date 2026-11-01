@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -23,11 +24,20 @@
 #include <libime/pinyin/pinyinmatchstate.h>
 #include "libime/core/languagemodel.h"
 #include "libime/core/segmentgraph.h"
+#include "pinyinencoder_p.h"
 
 namespace libime {
 
 using PinyinTriePosition = std::pair<uint64_t, size_t>;
 using PinyinTriePositions = std::vector<PinyinTriePosition>;
+
+// Use a span instead of a vector & so the non-caching PinyinMatchContext can
+// easily hold an empty instance.
+using PinyinFixesWithOffset =
+    std::pair<std::span<const PinyinSegmentFix>, size_t>;
+
+using PathWithFixes =
+    std::pair<const SegmentGraphPath &, PinyinFixesWithOffset>;
 
 // Matching result for a specific PinyinTrie.
 struct MatchedPinyinTrieNodes {
@@ -98,7 +108,9 @@ public:
         return seed;
     }
 
-    std::string stringFor(const SegmentGraphPath &path) const {
+    std::string stringFor(const PathWithFixes &key) const {
+        const auto &path = key.first;
+        const auto &[fixes, offset] = key.second;
         std::string result;
         result.reserve(path.size() + path.back()->index() -
                        path.front()->index() + 1);
@@ -111,16 +123,24 @@ public:
             if (data[begin] == '\'') {
                 continue;
             }
-            while (begin < end) {
-                result.push_back(data[begin]);
-                begin++;
+            if (const auto *fix =
+                    findExactFix(fixes, begin + offset, end + offset)) {
+                result.push_back(static_cast<char>(fix->fixed_.initial()));
+                result.push_back(static_cast<char>(fix->fixed_.final()));
+            } else {
+                while (begin < end) {
+                    result.push_back(data[begin]);
+                    begin++;
+                }
             }
             result.push_back('|');
         }
         return result;
     }
 
-    size_t operator()(const SegmentGraphPath &path) const {
+    size_t operator()(const PathWithFixes &key) const {
+        const auto &path = key.first;
+        const auto &[fixes, offset] = key.second;
         if (path.size() <= 1) {
             return 0;
         }
@@ -136,9 +156,17 @@ public:
             if (data[begin] == '\'') {
                 continue;
             }
-            while (begin < end) {
-                boost::hash_combine(seed, hasher(data[begin]));
-                begin++;
+            if (const auto *fix =
+                    findExactFix(fixes, begin + offset, end + offset)) {
+                boost::hash_combine(
+                    seed, hasher(static_cast<char>(fix->fixed_.initial())));
+                boost::hash_combine(
+                    seed, hasher(static_cast<char>(fix->fixed_.final())));
+            } else {
+                while (begin < end) {
+                    boost::hash_combine(seed, hasher(data[begin]));
+                    begin++;
+                }
             }
             boost::hash_combine(seed, hasher('|'));
         }
@@ -159,7 +187,9 @@ public:
         return lhs == rhs;
     }
 
-    bool operator()(const SegmentGraphPath &path, const std::string &s) const {
+    bool operator()(const PathWithFixes &key, const std::string &s) const {
+        const auto &path = key.first;
+        const auto &[fixes, offset] = key.second;
         if (path.size() <= 1) {
             return false;
         }
@@ -174,15 +204,29 @@ public:
             if (data[begin] == '\'') {
                 continue;
             }
-            while (begin < end && is != s.end()) {
-                if (*is != data[begin]) {
+            if (const auto *fix =
+                    findExactFix(fixes, begin + offset, end + offset)) {
+                if (is == s.end() ||
+                    *is != static_cast<char>(fix->fixed_.initial())) {
                     return false;
                 }
                 is++;
-                begin++;
-            }
-            if (begin != end) {
-                return false;
+                if (is == s.end() ||
+                    *is != static_cast<char>(fix->fixed_.final())) {
+                    return false;
+                }
+                is++;
+            } else {
+                while (begin < end && is != s.end()) {
+                    if (*is != data[begin]) {
+                        return false;
+                    }
+                    is++;
+                    begin++;
+                }
+                if (begin != end) {
+                    return false;
+                }
             }
 
             if (is == s.end() || *is != '|') {
@@ -193,8 +237,8 @@ public:
         return iter + 1 == path.end() && is == s.end();
     }
 
-    bool operator()(const std::string &s, const SegmentGraphPath &path) const {
-        return (*this)(path, s);
+    bool operator()(const std::string &s, const PathWithFixes &key) const {
+        return (*this)(key, s);
     }
 
 private:
