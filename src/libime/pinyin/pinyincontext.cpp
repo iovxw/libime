@@ -40,6 +40,7 @@
 #include "pinyindecoder.h"
 #include "pinyindecoder_p.h"
 #include "pinyinencoder.h"
+#include "pinyinencoder_p.h"
 #include "pinyinime.h"
 #include "pinyinmatchstate.h"
 
@@ -976,13 +977,26 @@ std::pair<std::string, size_t> PinyinContext::preeditWithCursor() const {
     return preeditWithCursor(ime()->preeditMode());
 }
 
+std::tuple<std::string, size_t, std::vector<std::pair<size_t, size_t>>>
+PinyinContext::preeditWithCursorHighlight() const {
+    return preeditWithCursorHighlight(ime()->preeditMode());
+}
+
 std::string PinyinContext::preedit(PinyinPreeditMode mode) const {
     return preeditWithCursor(mode).first;
 }
 
 std::pair<std::string, size_t>
 PinyinContext::preeditWithCursor(PinyinPreeditMode mode) const {
+    auto [text, cursor, highlights] = preeditWithCursorHighlight(mode);
+    (void)highlights;
+    return {std::move(text), cursor};
+}
+
+std::tuple<std::string, size_t, std::vector<std::pair<size_t, size_t>>>
+PinyinContext::preeditWithCursorHighlight(PinyinPreeditMode mode) const {
     FCITX_D();
+    std::vector<std::pair<size_t, size_t>> highlights;
     std::string ss = selectedSentence();
     const auto len = selectedLength();
     auto c = cursor();
@@ -1009,6 +1023,7 @@ PinyinContext::preeditWithCursor(PinyinPreeditMode mode) const {
                 size_t cursorInPinyin = c - from - len;
                 const size_t startPivot = resultSize;
                 auto pinyin = d->segs_.segment(from, to);
+                const auto *fix = findExactFix(d->fixes_, len + from, len + to);
                 MatchedPinyinSyllables syls;
                 if (mode == PinyinPreeditMode::Pinyin) {
                     // The reason that we don't use fuzzy flag from option is
@@ -1068,6 +1083,15 @@ PinyinContext::preeditWithCursor(PinyinPreeditMode mode) const {
                         matchPinyinCase(pinyin, actualPinyin);
                     }
                 }
+                if (fix) {
+                    // A fixed syllable is displayed as the fixed pinyin, not
+                    // as the raw input.
+                    actualPinyin = PinyinEncoder::initialFinalToPinyinString(
+                        fix->fixed_.initial(), fix->fixed_.final());
+                    if (!useShuangpin()) {
+                        matchPinyinCase(pinyin, actualPinyin);
+                    }
+                }
                 if (!actualPinyin.empty()) {
                     if (c > from + len && c <= to + len) {
                         if (useShuangpin()) {
@@ -1105,6 +1129,9 @@ PinyinContext::preeditWithCursor(PinyinPreeditMode mode) const {
                     ss.append(pinyin.data(), pinyin.size());
                     resultSize += pinyin.size();
                 }
+                if (fix) {
+                    highlights.emplace_back(startPivot, resultSize);
+                }
                 if (c > from + len && c <= to + len) {
                     actualCursor = startPivot + cursorInPinyin;
                 }
@@ -1114,7 +1141,7 @@ PinyinContext::preeditWithCursor(PinyinPreeditMode mode) const {
     if (c == size()) {
         actualCursor = resultSize;
     }
-    return {ss, actualCursor};
+    return {std::move(ss), actualCursor, std::move(highlights)};
 }
 
 std::vector<std::string> PinyinContext::selectedWords() const {

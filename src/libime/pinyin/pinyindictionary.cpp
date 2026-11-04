@@ -45,6 +45,7 @@
 #include "constants.h"
 #include "pinyindecoder_p.h"
 #include "pinyinencoder.h"
+#include "pinyinencoder_p.h"
 #include "pinyinmatchstate_p.h"
 
 namespace libime {
@@ -57,19 +58,6 @@ const char pinyinHanziSep = '!';
 
 constexpr uint32_t pinyinBinaryFormatMagic = 0x000fc613;
 constexpr uint32_t pinyinBinaryFormatVersion = 0x2;
-
-// Return the fix that exactly covers the segment [from, to), if any.
-// The fixes are ordered and non-overlapping, so a binary search by start_
-// finds the only candidate.
-const PinyinSegmentFix *findExactFix(const std::vector<PinyinSegmentFix> &fixes,
-                                     size_t from, size_t to) {
-    const auto iter =
-        std::ranges::lower_bound(fixes, from, {}, &PinyinSegmentFix::start_);
-    if (iter != fixes.end() && iter->start_ == from && iter->end_ == to) {
-        return &*iter;
-    }
-    return nullptr;
-}
 
 struct PinyinSegmentGraphPathHasher {
     PinyinSegmentGraphPathHasher(const SegmentGraph &graph,
