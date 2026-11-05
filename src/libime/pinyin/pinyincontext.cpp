@@ -995,11 +995,17 @@ PinyinContext::preeditWithCursor(PinyinPreeditMode mode) const {
 
 std::tuple<std::string, size_t, std::vector<std::pair<size_t, size_t>>>
 PinyinContext::preeditWithCursorHighlight(PinyinPreeditMode mode) const {
+    return preeditWithCursorHighlightImpl(mode, cursor());
+}
+
+std::tuple<std::string, size_t, std::vector<std::pair<size_t, size_t>>>
+PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
+                                              size_t inputCursor) const {
     FCITX_D();
     std::vector<std::pair<size_t, size_t>> highlights;
     std::string ss = selectedSentence();
     const auto len = selectedLength();
-    auto c = cursor();
+    auto c = inputCursor;
     size_t actualCursor = ss.size();
     // should not happen
     c = std::max(c, len);
@@ -1142,6 +1148,34 @@ PinyinContext::preeditWithCursorHighlight(PinyinPreeditMode mode) const {
         actualCursor = resultSize;
     }
     return {std::move(ss), actualCursor, std::move(highlights)};
+}
+
+std::optional<size_t>
+PinyinContext::cursorForPreeditPosition(size_t preeditByteCursor,
+                                        PinyinPreeditMode mode) const {
+    const auto selectedBytes = selectedSentence().size();
+    // The selected sentence has no raw input cursor.
+    if (preeditByteCursor < selectedBytes) {
+        return std::nullopt;
+    }
+
+    size_t target = selectedLength();
+    // Pick the last input cursor whose preedit cursor is not after the
+    // requested position. This keeps a fix when the position is at the end
+    // of its rendered syllable and discards it when the position is inside.
+    for (size_t p = selectedLength(); p <= size(); p++) {
+        const auto cursorAtP =
+            std::get<1>(preeditWithCursorHighlightImpl(mode, p));
+        if (cursorAtP <= preeditByteCursor) {
+            target = p;
+        }
+    }
+    return target;
+}
+
+std::optional<size_t>
+PinyinContext::cursorForPreeditPosition(size_t preeditByteCursor) const {
+    return cursorForPreeditPosition(preeditByteCursor, ime()->preeditMode());
 }
 
 std::vector<std::string> PinyinContext::selectedWords() const {

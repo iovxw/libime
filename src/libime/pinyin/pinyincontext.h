@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -148,6 +149,30 @@ public:
     std::tuple<std::string, size_t, std::vector<std::pair<size_t, size_t>>>
     preeditWithCursorHighlight() const;
 
+    /**
+     * Return the input cursor corresponding to a cursor position in the
+     * preedit.
+     *
+     * @param preeditByteCursor byte offset of the cursor in the preedit
+     *        string. It should be on a UTF-8 character boundary.
+     * @param mode how the unselected pinyin is rendered.
+     * @return the corresponding input cursor, or std::nullopt if the
+     *         position is within the selected sentence, which has no raw
+     *         input cursor.
+     */
+    std::optional<size_t>
+    cursorForPreeditPosition(size_t preeditByteCursor,
+                             PinyinPreeditMode mode) const;
+
+    /**
+     * Return the input cursor corresponding to a cursor position in the
+     * preedit.
+     *
+     * @see cursorForPreeditPosition(size_t, PinyinPreeditMode) const
+     */
+    std::optional<size_t>
+    cursorForPreeditPosition(size_t preeditByteCursor) const;
+
     /// Selected hanzi.
     std::string selectedSentence() const;
 
@@ -239,6 +264,9 @@ protected:
     bool typeImpl(const char *s, size_t length) override;
 
 private:
+    std::tuple<std::string, size_t, std::vector<std::pair<size_t, size_t>>>
+    preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
+                                   size_t inputCursor) const;
     void update();
     bool learnWord();
     std::unique_ptr<PinyinContextPrivate> d_ptr;

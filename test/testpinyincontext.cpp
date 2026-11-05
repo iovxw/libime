@@ -528,6 +528,64 @@ int main() {
         FCITX_ASSERT(!highlights.empty());
     }
 
+    // Preedit positions can be mapped back to the input cursor.
+    {
+        c.clear();
+        c.type("xi'an");
+        const auto mode = PinyinPreeditMode::RawText;
+        auto [preedit, cursor, highlights] = c.preeditWithCursorHighlight(mode);
+        FCITX_ASSERT(preedit == "xi ' an") << preedit;
+        (void)cursor;
+        (void)highlights;
+
+        // Positions 3 and 5 are gaps caused by the inserted spaces; they
+        // snap to the input cursor on their left.
+        const std::array<size_t, 9> expected = {0, 1, 2, 2, 3, 3, 4, 5, 5};
+        for (size_t i = 0; i < expected.size(); i++) {
+            auto target = c.cursorForPreeditPosition(i, mode);
+            FCITX_ASSERT(target.has_value());
+            FCITX_ASSERT(*target == expected[i])
+                << "Preedit position " << i << " target " << *target
+                << " expected " << expected[i];
+        }
+    }
+
+    // The end of a fixed syllable maps to the fix end, while any position
+    // inside its rendered text maps to the fix start.
+    {
+        c.clear();
+        c.type("sui");
+        c.setPinyinFixes({{0, 3, {PinyinInitial::SH, PinyinFinal::UI}}});
+        const auto mode = PinyinPreeditMode::RawText;
+        auto [preedit, cursor, highlights] = c.preeditWithCursorHighlight(mode);
+        FCITX_ASSERT(preedit == "shui") << preedit;
+        (void)cursor;
+        (void)highlights;
+
+        FCITX_ASSERT(c.cursorForPreeditPosition(0, mode).value() == 0);
+        FCITX_ASSERT(c.cursorForPreeditPosition(1, mode).value() == 0);
+        FCITX_ASSERT(c.cursorForPreeditPosition(3, mode).value() == 0);
+        FCITX_ASSERT(c.cursorForPreeditPosition(4, mode).value() == 3);
+        FCITX_ASSERT(c.cursorForPreeditPosition(5, mode).value() == 3);
+    }
+
+    // Positions inside the selected sentence have no input cursor.
+    {
+        c.clear();
+        c.type("nuhaoxian");
+        c.setPinyinFixes({{0, 2, {PinyinInitial::N, PinyinFinal::I}}});
+        c.select(0);
+        const auto mode = PinyinPreeditMode::RawText;
+        FCITX_ASSERT(!c.selectedSentence().empty());
+        FCITX_ASSERT(!c.cursorForPreeditPosition(0, mode).has_value());
+        auto target =
+            c.cursorForPreeditPosition(c.selectedSentence().size(), mode);
+        FCITX_ASSERT(target.has_value());
+        FCITX_ASSERT(*target == c.selectedLength());
+        c.cancel();
+        FCITX_ASSERT(c.pinyinFixes().size() == 1);
+    }
+
     // Editing the input cancels the affected fixes.
     {
         c.clear();
@@ -597,6 +655,15 @@ int main() {
         checkCandidateSet(c);
         FCITX_ASSERT(c.candidateSet().count("怒") > 0);
         FCITX_ASSERT(c.candidateSet().count("你") == 0);
+
+        const auto mode = PinyinPreeditMode::RawText;
+        auto [preedit, cursor, highlights] = c.preeditWithCursorHighlight(mode);
+        (void)cursor;
+        (void)highlights;
+        FCITX_ASSERT(c.cursorForPreeditPosition(0, mode).value() == 0);
+        FCITX_ASSERT(c.cursorForPreeditPosition(1, mode).value() == 1);
+        FCITX_ASSERT(c.cursorForPreeditPosition(preedit.size(), mode).value() ==
+                     c.size());
 
         // Force "nu" to be read as "ni".
         c.setPinyinFixes({{0, 2, {PinyinInitial::N, PinyinFinal::I}}});
