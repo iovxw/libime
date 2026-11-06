@@ -789,6 +789,46 @@ void PinyinContext::update() {
                 userInput().substr(start), d->ime_->correctionProfile().get(),
                 d->ime_->fuzzyFlags());
         }
+        // A fix may force a syllable boundary that the regular parse does not
+        // have. For example, "sh" is parsed as a single incomplete syllable,
+        // but fixing "s" and "h" separately needs a node between them. Split
+        // every edge crossing a fix boundary and add an edge for the fix
+        // itself, so a fix spanning multiple parsed nodes is still read as one
+        // syllable (e.g. xiangui + fix [0,5) = xiang).
+        auto splitAt = [&newGraph](size_t idx) {
+            if (idx == 0 || idx >= newGraph.size()) {
+                return;
+            }
+            std::vector<std::pair<size_t, size_t>> crossing;
+            for (size_t i = 0; i < idx; i++) {
+                for (const auto &node : newGraph.nodes(i)) {
+                    for (const auto &next : node.nexts()) {
+                        if (next.index() > idx) {
+                            crossing.emplace_back(node.index(), next.index());
+                        }
+                    }
+                }
+            }
+            for (const auto &[from, to] : crossing) {
+                newGraph.addNext(from, idx);
+                newGraph.addNext(idx, to);
+            }
+        };
+        for (const auto &fix : d->fixes_) {
+            // Dormant fixes are covered by the current selection and do not
+            // participate in decoding.
+            if (fix.start_ < start) {
+                continue;
+            }
+            const size_t from = fix.start_ - start;
+            const size_t to = fix.end_ - start;
+            if (from >= to || to > newGraph.size()) {
+                continue;
+            }
+            splitAt(from);
+            splitAt(to);
+            newGraph.addNext(from, to);
+        }
         d->segs_.merge(
             newGraph,
             [d](const std::unordered_set<const SegmentGraphNode *> &nodes) {

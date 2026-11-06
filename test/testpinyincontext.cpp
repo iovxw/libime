@@ -469,6 +469,59 @@ int main() {
         FCITX_ASSERT(!anyCandidatePinyinStartsWith(c, "nu"));
     }
 
+    // A fix can introduce a boundary that the regular parse does not have.
+    // "sh" is parsed as one incomplete syllable, so fixing "s" and "h"
+    // separately must split the graph instead of rejecting every path.
+    {
+        c.clear();
+        c.type("sh");
+        FCITX_ASSERT(!c.candidates().empty());
+
+        c.setPinyinFixes({{0, 1, {PinyinInitial::S, PinyinFinal::Invalid}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(!c.candidates().empty());
+        auto [preedit, cursor, highlights] =
+            c.preeditWithCursorHighlight(PinyinPreeditMode::RawText);
+        FCITX_ASSERT(preedit == "s h") << preedit;
+        FCITX_ASSERT(highlights.size() == 1);
+        FCITX_ASSERT(highlights.front() == std::pair<size_t, size_t>(0, 1));
+        (void)cursor;
+
+        c.setPinyinFixes({{0, 1, {PinyinInitial::S, PinyinFinal::Invalid}},
+                          {1, 2, {PinyinInitial::H, PinyinFinal::Invalid}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(!c.candidates().empty());
+        std::tie(preedit, cursor, highlights) =
+            c.preeditWithCursorHighlight(PinyinPreeditMode::RawText);
+        FCITX_ASSERT(preedit == "s h") << preedit;
+        FCITX_ASSERT(highlights.size() == 2);
+        FCITX_ASSERT(highlights[0] == std::pair<size_t, size_t>(0, 1));
+        FCITX_ASSERT(highlights[1] == std::pair<size_t, size_t>(2, 3));
+    }
+
+    // A fix can also span several parsed nodes. "xiangui" is parsed as
+    // "xian" + "gui", so splitting at the fix boundaries cannot produce a
+    // single edge from 0 to 5. The fix itself must still become one edge,
+    // otherwise every path is rejected and only raw text is left.
+    {
+        c.clear();
+        c.type("xiangui");
+        checkCandidateSet(c);
+        FCITX_ASSERT(!anyCandidatePinyinStartsWith(c, "xiang"));
+
+        c.setPinyinFixes({{0, 5, {PinyinInitial::X, PinyinFinal::IANG}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(!c.candidates().empty());
+        FCITX_ASSERT(anyCandidatePinyinStartsWith(c, "xiang"));
+
+        auto [preedit, cursor, highlights] =
+            c.preeditWithCursorHighlight(PinyinPreeditMode::RawText);
+        FCITX_ASSERT(preedit == "xiang ui") << preedit;
+        FCITX_ASSERT(highlights.size() == 1);
+        FCITX_ASSERT(highlights.front() == std::pair<size_t, size_t>(0, 5));
+        (void)cursor;
+    }
+
     // Preedit displays the fixed syllable instead of the raw input.
     {
         ime.dict()->addWord(PinyinDictionary::UserDict, "shui", "水");
