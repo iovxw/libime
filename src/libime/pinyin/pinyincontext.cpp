@@ -753,6 +753,15 @@ void PinyinContext::setPinyinFixes(std::vector<PinyinSegmentFix> fixes) {
     if (d->fixes_ == fixes) {
         return;
     }
+
+    for (size_t i = 0; i < fixes.size(); ++i) {
+        const auto &fix = fixes[i];
+        if (fix.start_ > fix.end_ || (i && (fixes[i - 1].start_ > fix.start_ ||
+                                            fixes[i - 1].end_ > fix.start_))) {
+            throw std::invalid_argument("Invalid pinyin fixes");
+        }
+    }
+
     const size_t start = selectedLength();
     auto it1 = std::ranges::lower_bound(d->fixes_, start, {},
                                         &PinyinSegmentFix::start_);
