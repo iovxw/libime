@@ -1083,7 +1083,15 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
                 auto pinyin = d->segs_.segment(from, to);
                 const auto *fix = findExactFix(d->fixes_, len + from, len + to);
                 MatchedPinyinSyllables syls;
-                if (mode == PinyinPreeditMode::Pinyin) {
+                std::string actualPinyin;
+                if (fix) {
+                    // A fixed syllable is displayed as the fixed pinyin, not
+                    // as the raw input.
+                    syls = {{fix->fixed_.initial(),
+                             {{fix->fixed_.final(), false}}}};
+                    actualPinyin = PinyinEncoder::initialFinalToPinyinString(
+                        fix->fixed_.initial(), fix->fixed_.final());
+                } else if (mode == PinyinPreeditMode::Pinyin) {
                     // The reason that we don't use fuzzy flag from option is
                     // that we'd like to keep the preedit as is. Otherwise,
                     // "qign" would be displayed as "qing", which would be
@@ -1094,62 +1102,57 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
                                      PinyinFuzzyFlag::None)
                                : PinyinEncoder::stringToSyllables(
                                      pinyin, PinyinFuzzyFlag::None);
-                }
-                std::string actualPinyin;
-                if (!syls.empty() && !syls.front().second.empty()) {
-                    std::string_view candidatePinyin =
-                        node->as<PinyinLatticeNode>().encodedPinyin();
-                    auto nthPinyin = std::distance(node->path().begin(), iter);
-                    PinyinInitial bestInitial = syls[0].first;
-                    PinyinFinal bestFinal = syls[0].second[0].first;
 
-                    // Try to match the candidate syllables from all possible
-                    // none-fuzzy possible syls.
-                    if (static_cast<size_t>((nthPinyin * 2) + 2) <=
-                        candidatePinyin.size()) {
-                        auto candidateInitial = static_cast<PinyinInitial>(
-                            candidatePinyin[nthPinyin * 2]);
-                        auto candidateFinal = static_cast<PinyinFinal>(
-                            candidatePinyin[(nthPinyin * 2) + 1]);
+                    if (!syls.empty() && !syls.front().second.empty()) {
+                        std::string_view candidatePinyin =
+                            node->as<PinyinLatticeNode>().encodedPinyin();
+                        auto nthPinyin =
+                            std::distance(node->path().begin(), iter);
+                        PinyinInitial bestInitial = syls[0].first;
+                        PinyinFinal bestFinal = syls[0].second[0].first;
 
-                        bool found = false;
-                        for (const auto &initial : syls) {
-                            for (const auto &[final, fuzzy] : initial.second) {
-                                if (fuzzy) {
-                                    continue;
-                                }
-                                if (candidateInitial == initial.first &&
-                                    (final == PinyinFinal::Invalid ||
-                                     candidateFinal == final)) {
-                                    bestInitial = initial.first;
-                                    if (final != PinyinFinal::Invalid) {
-                                        bestFinal = final;
+                        // Try to match the candidate syllables from all
+                        // possible none-fuzzy possible syls.
+                        if (static_cast<size_t>((nthPinyin * 2) + 2) <=
+                            candidatePinyin.size()) {
+                            auto candidateInitial = static_cast<PinyinInitial>(
+                                candidatePinyin[nthPinyin * 2]);
+                            auto candidateFinal = static_cast<PinyinFinal>(
+                                candidatePinyin[(nthPinyin * 2) + 1]);
+
+                            bool found = false;
+                            for (const auto &initial : syls) {
+                                for (const auto &[final, fuzzy] :
+                                     initial.second) {
+                                    if (fuzzy) {
+                                        continue;
                                     }
-                                    found = true;
+                                    if (candidateInitial == initial.first &&
+                                        (final == PinyinFinal::Invalid ||
+                                         candidateFinal == final)) {
+                                        bestInitial = initial.first;
+                                        if (final != PinyinFinal::Invalid) {
+                                            bestFinal = final;
+                                        }
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if (found) {
                                     break;
                                 }
                             }
-                            if (found) {
-                                break;
-                            }
+                        }
+
+                        actualPinyin =
+                            PinyinEncoder::initialFinalToPinyinString(
+                                bestInitial, bestFinal);
+                        if (!useShuangpin()) {
+                            matchPinyinCase(pinyin, actualPinyin);
                         }
                     }
+                }
 
-                    actualPinyin = PinyinEncoder::initialFinalToPinyinString(
-                        bestInitial, bestFinal);
-                    if (!useShuangpin()) {
-                        matchPinyinCase(pinyin, actualPinyin);
-                    }
-                }
-                if (fix) {
-                    // A fixed syllable is displayed as the fixed pinyin, not
-                    // as the raw input.
-                    actualPinyin = PinyinEncoder::initialFinalToPinyinString(
-                        fix->fixed_.initial(), fix->fixed_.final());
-                    if (!useShuangpin()) {
-                        matchPinyinCase(pinyin, actualPinyin);
-                    }
-                }
                 if (!actualPinyin.empty()) {
                     if (c > from + len && c <= to + len) {
                         if (fix && c == to + len) {
