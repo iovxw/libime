@@ -550,6 +550,57 @@ int main() {
         }
     }
 
+    // Cursor mapping works when a fixed syllable renders shorter or longer
+    // than its raw input.
+    {
+        const auto checkCursorMapping =
+            [&](std::string_view rawInput, std::string_view fixedPinyin,
+                PinyinInitial initial, PinyinFinal final,
+                const std::vector<size_t> &inputToPreedit,
+                const std::vector<size_t> &preeditToInput) {
+                const auto mode = PinyinPreeditMode::RawText;
+                for (size_t i = 0; i < inputToPreedit.size(); i++) {
+                    c.clear();
+                    c.type(rawInput);
+                    c.setCursor(i);
+                    c.setPinyinFixes({{0, rawInput.size(), {initial, final}}});
+
+                    auto [preedit, cursor, highlights] =
+                        c.preeditWithCursorHighlight(mode);
+                    FCITX_ASSERT(preedit == fixedPinyin) << preedit;
+                    FCITX_ASSERT(cursor == inputToPreedit[i])
+                        << "Input cursor " << i << " preedit cursor " << cursor
+                        << " expected " << inputToPreedit[i];
+                    FCITX_ASSERT(highlights.size() == 1);
+                }
+
+                c.clear();
+                c.type(rawInput);
+                c.setPinyinFixes({{0, rawInput.size(), {initial, final}}});
+                auto [preedit, cursor, highlights] =
+                    c.preeditWithCursorHighlight(mode);
+                FCITX_ASSERT(preedit == fixedPinyin) << preedit;
+                FCITX_ASSERT(preeditToInput.size() == preedit.size() + 1);
+                for (size_t i = 0; i < preeditToInput.size(); i++) {
+                    auto target = c.cursorForPreeditPosition(i, mode);
+                    FCITX_ASSERT(target.has_value());
+                    FCITX_ASSERT(*target == preeditToInput[i])
+                        << "Preedit cursor " << i << " input cursor " << *target
+                        << " expected " << preeditToInput[i];
+                }
+                (void)cursor;
+                (void)highlights;
+            };
+
+        // "shuang" fixed to "san".
+        checkCursorMapping("shuang", "san", PinyinInitial::S, PinyinFinal::AN,
+                           {0, 1, 2, 2, 2, 2, 3}, {0, 1, 2, 6});
+        // "san" fixed to "shuang".
+        checkCursorMapping("san", "shuang", PinyinInitial::SH,
+                           PinyinFinal::UANG, {0, 1, 2, 6},
+                           {0, 1, 2, 2, 2, 2, 3});
+    }
+
     // The end of a fixed syllable maps to the fix end. Positions inside the
     // rendered text keep the linear mapping and stay before the fix end, so
     // that entering the fix still cancels it.

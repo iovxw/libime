@@ -1155,12 +1155,7 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
 
                 if (!actualPinyin.empty()) {
                     if (c > from + len && c <= to + len) {
-                        if (fix && c == to + len) {
-                            // The end of a fixed syllable is displayed at the
-                            // end of the fixed pinyin, regardless of how the
-                            // raw input length compares to the rendered one.
-                            cursorInPinyin = actualPinyin.size();
-                        } else if (useShuangpin()) {
+                        if (useShuangpin()) {
                             switch (cursorInPinyin) {
                             case 0:
                                 break;
@@ -1183,10 +1178,21 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
                                 break;
                             }
                         } else {
-                            cursorInPinyin =
-                                std::min(actualPinyin.size(), cursorInPinyin);
-                            cursorInPinyin = fcitx::utf8::ncharByteLength(
-                                actualPinyin.begin(), cursorInPinyin);
+                            // |012345 → |012
+                            // 0|12345 → 0|12
+                            // 01|2345 → 01|2
+                            // 012|345 → 01|2
+                            // 0123|45 → 01|2
+                            // 01234|5 → 01|2
+                            // 012345| → 012|
+                            if (c == to + len) {
+                                cursorInPinyin = actualPinyin.size();
+                            } else {
+                                cursorInPinyin = std::min(
+                                    actualPinyin.size() - 1, cursorInPinyin);
+                                cursorInPinyin = fcitx::utf8::ncharByteLength(
+                                    actualPinyin.begin(), cursorInPinyin);
+                            }
                         }
                     }
                     ss.append(actualPinyin);
@@ -1210,6 +1216,32 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
     return {std::move(ss), actualCursor, std::move(highlights)};
 }
 
+// A fix can render shorter than the raw input. With "012345" fixed to
+// "012":
+//
+//   ┌─────────┬─────────┐
+//   │ preedit │   raw   │
+//   ├─────────┼─────────┤
+//   │ |012    │ |012345 │
+//   │ 0|12    │ 0|12345 │
+//   │ 01|2    │ 01|2345 │
+//   │ 012|    │ 012345| │
+//   └─────────┴─────────┘
+//
+// A fix can also render longer than the raw input. With "012" fixed to
+// "012345":
+//
+//   ┌─────────┬──────┐
+//   │ preedit │ raw  │
+//   ├─────────┼──────┤
+//   │ |012345 │ |012 │
+//   │ 0|12345 │ 0|12 │
+//   │ 01|2345 │ 01|2 │
+//   │ 012|345 │ 01|2 │
+//   │ 0123|45 │ 01|2 │
+//   │ 01234|5 │ 01|2 │
+//   │ 012345| │ 012| │
+//   └─────────┴──────┘
 std::optional<size_t>
 PinyinContext::cursorForPreeditPosition(size_t preeditByteCursor,
                                         PinyinPreeditMode mode) const {
