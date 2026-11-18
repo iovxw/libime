@@ -1189,7 +1189,8 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
                                 cursorInPinyin = actualPinyin.size();
                             } else {
                                 cursorInPinyin = std::min(
-                                    actualPinyin.size() - 1, cursorInPinyin);
+                                    fcitx::utf8::length(actualPinyin) - 1,
+                                    cursorInPinyin);
                                 cursorInPinyin = fcitx::utf8::ncharByteLength(
                                     actualPinyin.begin(), cursorInPinyin);
                             }

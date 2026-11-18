@@ -557,7 +557,7 @@ int main() {
             [&](std::string_view rawInput, std::string_view fixedPinyin,
                 PinyinInitial initial, PinyinFinal final,
                 const std::vector<size_t> &inputToPreedit,
-                const std::vector<size_t> &preeditToInput) {
+                const std::vector<std::pair<size_t, size_t>> &preeditToInput) {
                 const auto mode = PinyinPreeditMode::RawText;
                 for (size_t i = 0; i < inputToPreedit.size(); i++) {
                     c.clear();
@@ -580,13 +580,14 @@ int main() {
                 auto [preedit, cursor, highlights] =
                     c.preeditWithCursorHighlight(mode);
                 FCITX_ASSERT(preedit == fixedPinyin) << preedit;
-                FCITX_ASSERT(preeditToInput.size() == preedit.size() + 1);
-                for (size_t i = 0; i < preeditToInput.size(); i++) {
-                    auto target = c.cursorForPreeditPosition(i, mode);
+                FCITX_ASSERT(preeditToInput.front().first == 0);
+                FCITX_ASSERT(preeditToInput.back().first == preedit.size());
+                for (const auto &[preeditPos, inputCursor] : preeditToInput) {
+                    auto target = c.cursorForPreeditPosition(preeditPos, mode);
                     FCITX_ASSERT(target.has_value());
-                    FCITX_ASSERT(*target == preeditToInput[i])
-                        << "Preedit cursor " << i << " input cursor " << *target
-                        << " expected " << preeditToInput[i];
+                    FCITX_ASSERT(*target == inputCursor)
+                        << "Preedit cursor " << preeditPos << " input cursor "
+                        << *target << " expected " << inputCursor;
                 }
                 (void)cursor;
                 (void)highlights;
@@ -594,11 +595,18 @@ int main() {
 
         // "shuang" fixed to "san".
         checkCursorMapping("shuang", "san", PinyinInitial::S, PinyinFinal::AN,
-                           {0, 1, 2, 2, 2, 2, 3}, {0, 1, 2, 6});
+                           {0, 1, 2, 2, 2, 2, 3},
+                           {{0, 0}, {1, 1}, {2, 2}, {3, 6}});
         // "san" fixed to "shuang".
-        checkCursorMapping("san", "shuang", PinyinInitial::SH,
-                           PinyinFinal::UANG, {0, 1, 2, 6},
-                           {0, 1, 2, 2, 2, 2, 3});
+        checkCursorMapping(
+            "san", "shuang", PinyinInitial::SH, PinyinFinal::UANG, {0, 1, 2, 6},
+            {{0, 0}, {1, 1}, {2, 2}, {3, 2}, {4, 2}, {5, 2}, {6, 3}});
+        // "shuang" fixed to "nü" renders 2 code points in 3 bytes. A raw
+        // cursor inside the fix stays before the rendered end, so that only
+        // the rendered end maps back to the fix end. Byte 2 is in the middle
+        // of "ü", so only character boundaries are checked.
+        checkCursorMapping("shuang", "nü", PinyinInitial::N, PinyinFinal::V,
+                           {0, 1, 1, 1, 1, 1, 3}, {{0, 0}, {1, 1}, {3, 6}});
     }
 
     // The end of a fixed syllable maps to the fix end. Positions inside the
