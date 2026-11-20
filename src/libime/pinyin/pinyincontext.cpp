@@ -1089,8 +1089,10 @@ PinyinContext::preeditWithCursorHighlightImpl(PinyinPreeditMode mode,
                 const auto to = (*std::next(iter))->index();
                 const size_t startPivot = resultSize;
                 const auto pinyin = d->segs_.segment(from, to);
+                const auto *w =
+                    dynamic_cast<const SegmentGraphNodeWithData *>(*iter);
                 const auto *fixed =
-                    std::any_cast<PinyinSyllable>(&(*iter)->annotation());
+                    w ? std::any_cast<PinyinSyllable>(&w->data()) : nullptr;
                 MatchedPinyinSyllables syls;
                 std::string actualPinyin;
                 if (fixed) {
