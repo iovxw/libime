@@ -469,6 +469,60 @@ int main() {
         FCITX_ASSERT(!anyCandidatePinyinStartsWith(c, "nu"));
     }
 
+    // A fix uses explicitly enabled fuzzy pinyin like a free segment.
+    {
+        ime.dict()->addWord(PinyinDictionary::UserDict, "si", "四");
+        ime.dict()->addWord(PinyinDictionary::UserDict, "shi", "是");
+        ime.dict()->addWord(PinyinDictionary::UserDict, "san", "三");
+        ime.dict()->addWord(PinyinDictionary::UserDict, "sang", "桑");
+
+        // Without fuzzy, a fix only matches its exact reading.
+        ime.setFuzzyFlags(PinyinFuzzyFlag::None);
+        c.clear();
+        c.type("si");
+        c.setPinyinFixes({{0, 2, {PinyinInitial::SH, PinyinFinal::I}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(c.candidateSet().count("是") > 0);
+        FCITX_ASSERT(c.candidateSet().count("四") == 0);
+
+        // S_SH expands the fixed initial, so "shi" also matches "si".
+        ime.setFuzzyFlags(PinyinFuzzyFlag::S_SH);
+        c.clear();
+        c.type("si");
+        c.setPinyinFixes({{0, 2, {PinyinInitial::SH, PinyinFinal::I}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(c.candidateSet().count("是") > 0);
+        FCITX_ASSERT(c.candidateSet().count("四") > 0);
+
+        // Final fuzzy rules work the same way.
+        ime.setFuzzyFlags(PinyinFuzzyFlag::None);
+        c.clear();
+        c.type("san");
+        c.setPinyinFixes({{0, 3, {PinyinInitial::S, PinyinFinal::AN}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(c.candidateSet().count("三") > 0);
+        FCITX_ASSERT(c.candidateSet().count("桑") == 0);
+
+        ime.setFuzzyFlags(PinyinFuzzyFlag::AN_ANG);
+        c.clear();
+        c.type("san");
+        c.setPinyinFixes({{0, 3, {PinyinInitial::S, PinyinFinal::AN}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(c.candidateSet().count("三") > 0);
+        FCITX_ASSERT(c.candidateSet().count("桑") > 0);
+
+        // An incomplete fixed syllable also uses initial fuzzy rules.
+        ime.setFuzzyFlags(PinyinFuzzyFlag::S_SH);
+        c.clear();
+        c.type("s");
+        c.setPinyinFixes({{0, 1, {PinyinInitial::S, PinyinFinal::Invalid}}});
+        checkCandidateSet(c);
+        FCITX_ASSERT(c.candidateSet().count("四") > 0);
+        FCITX_ASSERT(c.candidateSet().count("是") > 0);
+
+        ime.setFuzzyFlags(PinyinFuzzyFlag::Inner);
+    }
+
     // Preedit displays the fixed syllable instead of the raw input.
     {
         ime.dict()->addWord(PinyinDictionary::UserDict, "shui", "水");
@@ -915,7 +969,8 @@ int main() {
         FCITX_ASSERT(c.cursorForPreeditPosition(1, mode).value() == 2);
         FCITX_ASSERT(c.cursorForPreeditPosition(2, mode).value() == 2);
         FCITX_ASSERT(c.cursorForPreeditPosition(3, mode).value() == 3);
-        FCITX_ASSERT(c.cursorForPreeditPosition(4, mode).value() == 3) << c.cursorForPreeditPosition(4, mode).value();
+        FCITX_ASSERT(c.cursorForPreeditPosition(4, mode).value() == 3)
+            << c.cursorForPreeditPosition(4, mode).value();
 
         // The separator before the last syllable belongs to "hao" on its left,
         // and so does the left edge of the last syllable: clicking "a" must
@@ -924,7 +979,8 @@ int main() {
         // a hao |a -> aahk|aa
         // a hao a| -> aahkaa|
         FCITX_ASSERT(c.cursorForPreeditPosition(5, mode).value() == 4);
-        FCITX_ASSERT(c.cursorForPreeditPosition(6, mode).value() == 4) << c.cursorForPreeditPosition(6, mode).value();
+        FCITX_ASSERT(c.cursorForPreeditPosition(6, mode).value() == 4)
+            << c.cursorForPreeditPosition(6, mode).value();
         FCITX_ASSERT(c.cursorForPreeditPosition(7, mode).value() == 6);
 
         // Clicking the left edge of the last syllable keeps the preedit

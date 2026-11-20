@@ -13,6 +13,12 @@
 
 namespace libime {
 
+// Expand a normalized syllable using only explicitly enabled fuzzy pinyin
+// rules. Input-level ambiguity rules are not applied.
+MatchedPinyinSyllablesWithFuzzyFlags
+expandSyllableWithExplicitFuzzy(PinyinSyllable syllable,
+                                PinyinFuzzyFlags flags);
+
 // Return the fix that exactly covers the segment [from, to), if any.
 // The fixes are ordered and non-overlapping, so a binary search by start_
 // finds the only candidate.
