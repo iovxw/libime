@@ -16,6 +16,8 @@
 
 namespace libime {
 
+SegmentGraphNodeWithData::~SegmentGraphNodeWithData() = default;
+
 struct SegmentGraphNodePairGreater {
     bool operator()(const std::pair<const SegmentGraphNode *,
                                     const SegmentGraphNode *> &lhs,
@@ -107,6 +109,18 @@ void SegmentGraph::merge(SegmentGraph &graph,
     std::unordered_set<const SegmentGraphNode *> nodeToDiscard;
     for (size_t i = 0; i < since; i++) {
         for (auto &node : mutableNodes(i)) {
+            // Always take data from the new graph, even for reused nodes.
+            if (auto *dstNode =
+                    dynamic_cast<SegmentGraphNodeWithData *>(&node)) {
+                if (i < graph.graph_.size() && graph.graph_[i]) {
+                    const auto *srcNode =
+                        dynamic_cast<const SegmentGraphNodeWithData *>(
+                            graph.graph_[i].get());
+                    dstNode->setData(srcNode ? srcNode->data() : std::any{});
+                } else {
+                    dstNode->setData(std::any{});
+                }
+            }
             std::vector<SegmentGraphNode *> newNext;
             for (auto &next : node.mutableNexts()) {
                 SegmentGraphNode *n;

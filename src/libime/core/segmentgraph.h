@@ -9,6 +9,7 @@
 // Workaround a boost missing include bug.
 #include <boost/type_traits/add_const.hpp>
 
+#include <any>
 #include <cassert>
 #include <cstddef>
 #include <functional>
@@ -114,6 +115,18 @@ protected:
 
 private:
     size_t start_;
+};
+
+class LIBIMECORE_EXPORT SegmentGraphNodeWithData : public SegmentGraphNode {
+public:
+    using SegmentGraphNode::SegmentGraphNode;
+    ~SegmentGraphNodeWithData() override;
+
+    void setData(std::any data) { data_ = std::move(data); }
+    const std::any &data() const { return data_; }
+
+private:
+    std::any data_;
 };
 
 using SegmentGraphPath = std::vector<const SegmentGraphNode *>;
@@ -358,7 +371,7 @@ private:
     }
 
     SegmentGraphNode &newNode(size_t idx) {
-        graph_[idx] = std::make_unique<SegmentGraphNode>(idx);
+        graph_[idx] = std::make_unique<SegmentGraphNodeWithData>(idx);
         return *graph_[idx];
     }
 
